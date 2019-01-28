@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>My Awesome Presentation</title>
+    <title>Doing more and better with Bash</title>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
     <style type="text/css">
       @import url(https://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
@@ -21,24 +21,596 @@
 
 class: center, middle
 
-# My Awesome Presentation
+# Doing more and better with Bash
 
-???
-
-Notes for the _first_ slide!
+Romain Pelisse - JBoss SET
 
 ---
 
 # Agenda
 
-1. Introduction
-2. Deep-dive
-3. ...
-
-[NOTE]: This file is portable; you don't need any other file, or an internet connection for this presentation.
+1. Introduction - Bash Basics
+2. File Structure
+3. Functions
+4. Variables
+5. Substitution de commandes
+6. Handling arguments with getopt
+7. Error handling
+8. Bash "strict mode"
+10. Tips and tricks
+11. Best practices
+12. Tooling
+13. Example: git-set-clone
 ---
 
-# Introduction
+# Introduction - Bash Basics
+
+.center[![Shell Interpretation Mechanism](./img/shell-mecanism.png "Shell Interpretation Mechanism")]
+
+---
+# Introduction - Bash basics
+* What is the difference between those two options:
+
+```
+$ oo create --password='redhat$123'
+```
+
+* and
+
+```
+$ oo create --password="redhat$123"
+```
+
+* Which will work?
+
+---
+# File Structure
+
+* What is the best option?
+
+```
+#!/bin/bash
+```
+
+```
+#!/bin/sh
+```
+* Don't forget the header! (At least for now)
+
+```
+$ head -3 /etc/init.d/ntpd
+#!/bin/bash
+#
+# ntpd          This shell script takes care of starting and stopping
+```
+* **indentation** - 2 spaces (my opinion)
+* Use [Google style convention](https://google.github.io/styleguide/shell.xml)
+* Read up [Shell Script Matter](https://dev.to/thiht/shell-scripts-matter)
+
+---
+# Functions
+
+* Yes, Bash has functions - use them for f**k's sake
+* Any script should have at least one function anyway (see later)
+* Recommended syntax
+
+```
+my_function() {
+
+
+
+}
+```
+
+* (my opinion but) **shorter** (no extra *function* keyword), plus () clearly states "function!"
+---
+# Validation is a thing
+* it's not because it's script that you should not validate
+* actually you should do it even more!
+
+```
+if [ ! -e "{input_file}" ]; then
+         echo "File ${input_file} does not exist."
+         return 1
+fi
+```
+* empty strings **can** also be validated
+```
+if [ ! -z "${output_file}" ]; then
+         echo "No output file provided.
+         exit 2
+fi
+```
+* and please, stop with this kind of **crap**:
+```
+if [ "x${output_file}" = "x" ]; then
+         echo "No output file provided.
+         exit 2
+fi
+```
+
+---
+# Function's local variable
+* Use local for function variable
+* Use **local** for any variable within the function
+* Rename *all arguments* (never use ${1} or ${2} afterward)
+* Any internal variable should also be local
+```
+my_function() {
+         local input_file="${1}"
+         local output_file="${2}"
+
+         local timeout='3'
+
+    ...
+}
+```
+
+---
+# Function's name
+* use it for clear error message:
+```
+echo "${FUNCNAME} has encouter a
+```
+* but avoid being a smarty pants 😒:
+```
+output() {
+       # yeah, we know you think you are sooo smart
+       cp "${input_file}" "${FUNCNAME}.txt"
+}
+```
+---
+# Usage function
+* always add a function called usage
+```
+usage() {
+        echo "$(basename ${0}) [-v] <inputfile>
+        echo ""
+        echo "-v verbose mode"
+}
+```
+* (btw, ${0} gives you the name of your script)
+* and use it!
+```
+if [ ! -z "${output_file}" ]; then
+         echo "No output file provided.
+         usage
+         exit 2
+fi
+```
+
+* if nothing else, it will help you when you use it again 3 month later
+---
+# Function can be pretty generic and reusable
+* As for instance:
+```
+unify_args () {
+        local tmp=$(mktemp)
+
+        for i in "$@"; do
+                echo "$i" >>"${tmp}"
+        done
+
+        # caller can retrieved result with ${RC}
+        RC=$(cat "${tmp}" | sort | uniq)
+        # that is why this one is NOT local ;)
+        clean "${tmp}"
+}
+```
+* and you can import them (and don't cut and paste them!!!)
+```
+#!/bin/bash
+# imports our cool functions
+. "$(dirname "${0}")/common.sh"
+```
+---
+# Variables
+* this syntax no longer OK: $var
+* this one is  barely better: ${var}
+* you **should** always do that instead "${var}"
+
+```
+function copy() {
+        local src=${1}
+        local dest=${2}
+
+        cp ${src} ${dest}
+}
+
+$ copy a b
+$ copy a "b d" # problem lead to an unclear message
+cp: target 'd' is not a directory
+```
+
+* **unless** you can't (rare, only if spaces needs to be interpret as separator)
+* (I called this practice **overquoting**)
+---
+# Variables should be readonly
+* any variable should be prefixed by readonly
+
+```
+$ readonly va="${1}" # see? overquoting...
+$ var="false"
+bash: var: readonly variable
+```
+
+* **unless** you need to change its value
+* readonly means immutable so I generally use the appropriate *naming convention*
+
+```
+readonly VAR="${1}"
+```
+
+---
+# Using default value for variable as much as possible
+
+* Bash has syntax to define default values
+
+```
+readonly INPUT_FILE=${1:-'input.txt'}
+```
+
+* you can even make it a tidbit dynamic
+
+```
+readonly JBOSS_ID=${1:-"jboss-${USER}")
+readonly JBOSS_HOME=${2:-"$(pwd)"}
+readonly TMP_DIR=${3:-"$(mktemp -d)"}
+```
+
+---
+# Command substitution
+* Syntax: None of us is old enough to be allowed to use this syntax...
+
+```
+$ echo `cat /etc/motd`
+```
+
+* ... *always* use this one
+
+```
+$ echo $(cat /etc/motd)
+```
+* Remember, substitution of command happens **last**
+* They are handy *but* do spawn a subprocess:
+
+```
+for i .. {1..1000}  # cool syntax trick,neh?
+do
+        echo $(cat /etc/motd) # will spawn 1000 subprocesses
+done
+```
+
+---
+# Handling arguments properly
+* Script can use *getopt* to have **robust** and **clean** argument handling
+
+```
+while getopts hB: OPT; do
+       case "$OPT" in
+            h) # yes, always do that!!!
+                usage
+                exit 0
+                ;;
+            b)
+                readonly BATCH_NAME=${OPTARG}
+                ;;
+            *)
+                echo "Unrecognized options:${OPTARG}"
+                ;;
+        esac
+done
+```
+* At runtime:
+
+```
+$ ./my-script.sh -h
+Usage: ./my-script [-h] -b <batch-name>
+$ ./my-script.sh -x
+Unrecognized options:-x
+```
+
+---
+# getopt is not a jail
+* you are not trapped by getopt, you can handle extra arguments if needed to:
+
+```
+...
+shift $(expr $OPTIND - 1)
+declare -a INSTANCES="$@" # associative array with the rest of the args, nice!
+
+if [ -z "${BATCH_NAME}" -a -z "${INSTANCES}" ]; then # validation in one line!
+    usage
+    exit 1
+fi
+```
+
+---
+# Error handling
+
+* use so-called bas [strict mode](http://redsymbol.net/articles/unofficial-bash-strict-mode/ "strict mode")
+
+```
+#!/bin/bash
+set -euo pipefail
+IFS=$'\n\t'
+```
+
+* let's break that down...
+
+---
+# Fail now (-e)
+
+```
+$ set -e
+```
+* script stops at the first command **not** finishing with status zero
+* a lifesaver but may lead you to have block surrounded by
+
+```
+set +e
+... # here it's OK for command to NOT return zero status
+set -e
+```
+
+* (but better than the other way around)
+* please don't this kind of crap
+
+```
+# yeah, we know, you are sooo smart
+$ occurences=$(grep -c schema some-file || true)
+```
+
+---
+
+# Forbid undefine variable (-u)
+
+* Let's write a small script:
+
+```
+#!/bin/bash
+set -u
+prenom="Romain"
+nomComplet="${prrenom} Pelisse" "LOOK HERE! Typo!!!
+echo "${nomComplet}"
+```
+
+* At runtime:
+
+```
+/tmp/err.txt: ligne 6: prrenom : variable sans liaison
+
+```
+* **Warning** this means you can't use variable ${1}, ${2} ...(undefined), but defaulting will work:
+
+```
+set -u
+name=${1:-}
+```
+
+* (so not a good reason to not use -u!!!!)
+
+---
+# Pipefail (-o pipefail)
+* it's classic problem with shell:
+
+```
+$ grep some-string /non/existent/file | sort
+grep: /non/existent/file: No such file or directory
+$ echo $?
+0
+# great! it's say 0 but it failed at the first command!
+```
+
+* oh, come on! Bash can be smarted than that!
+
+```
+set -o pipefail
+$ grep some-string /non/existent/file | sort
+$ grep: /non/existent/file: No such file or directory
+$ echo $?
+2
+```
+
+* Segway, you can also use the associate arravy PIE_STATU,
+* if you need to know which command passed or failed
+
+```
+$ ls -1 | mail | cat | cut -f1
+No mail for rpelisse
+$ echo "0:${PIPESTATUS[0]} 1:${PIPESTATUS[1]} 2:${PIPESTATUS[2]} 3:${PIPESTATUS[3]}"
+0:0 1:1 2:0 3:0
+```
+
+* (again, no excuses for shity validation)
+
+---
+# Define Internal Field Separator
+* Internal Field Separator (IFS) which character used to split a command line
+* Rarely needed to do so, but the following setting improve loop behavior:
+* Exemple (without)
+
+```
+#!/bin/bash
+names=(
+  "Romain Pelisse"
+  "Brian Stanberry"
+  "Carlo de Wolf"
+)
+
+for name in ${names[@]}; do
+  echo "$name"
+done
+```
+
+* Output is less than ideal
+
+```
+Romain
+Pelisse
+Brian
+Stanberry
+Carlo
+de
+Wolf
+```
+
+---
+# Define Internal Field Separator
+* Using the 'strict mode' setting:
+
+```
+IFS=$'\n\t'
+for name in ${names[@]}; do
+  echo "$name"
+done
+```
+
+* Output:
+
+```
+Romain Pelisse
+Brian Stanberry
+Carlo de Wolf
+```
+
+* Well, that certainly is better, isn't it?
+
+---
+# Tips and Tricks - mktemp
+* use 'mktemp' to create temporary file and folder
+* ensure there is no name conflict
+* will create file in /tmp
+---
+# Tips and Tricks - free resources
+* Like in Java, you may need to free some resources:
+```
+tmpFile=$(mktemp)
+...
+rm -rf ${tmpFile} # good, but if script exit before that?
+```
+* better register a cleanup function:
+
+```
+#!/bin/bash
+function finish {
+  local dirToDelete=${1}
+
+  # What did I say about validation?
+  if [ ! -d ${dirToDelete} ]; then
+    echo "File ${dirToDelete} is NOT a directory."
+    return 1
+  fi
+  rm -rf "${dirToDelete}"
+}
+trap finish EXIT
+```
+
+---
+# Tips and Tricks - PID and processus
+* you can get the PID of the current process:
+
+```
+$ echo $$
+14092
+```
+
+* also the PID of the process you just created:
+
+```
+dd if=/dev/zero of=/dev/null &
+$ pid=$(${!})
+$ sleep 120
+$ kill "${pid}"
+```
+
+* so you can manage subprocess (with timeout)
+
+---
+# Tips and Tricks - Filename & extensions
+
+* you can extract part of the filename very easily
+```
+filename=$(basename -- "$fullfile")
+extension="${filename##*.}"
+filename="${filename%.*}"
+```
+
+* btw, it's called [Shell parameter expansion](https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html)
+
+---
+# Best practices
+
+* Golden Rule: Bash is language like any other so
+* Any good practices *applies* to Bash!
+* if you would not do it in Java, don't do it in Bash
+* Bash script can *be very resilient* if you apply all we discussed
+
+---
+# Tooling - shellcheck
+
+* Use **shellcheck**
+
+```
+$ shellcheck ~/Repositories/perso/homescripts.git/ogg2wav
+
+In ogg2wav line 21:
+readonly ALBUM=$(basename ${DIR})
+                          ^-- SC2086: Double quote to prevent globbing and word splitting.
+
+
+In ogg2wav line 22:
+readonly ARTIST=$(basename $(echo ${DIR%/*}))
+                           ^-- SC2046: Quote this to prevent word splitting.
+                           ^-- SC2116: Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'.
+                                  ^-- SC2086: Double quote to prevent globbing and word splitting.
+
+
+In ogg2wav line 24:
+if [ -z ${ALBUM} ]; then
+        ^-- SC2086: Double quote to prevent globbing and word splitting.
+
+
+In ogg2wav line 28:
+if [ -z ${ARTIST} ]; then
+        ^-- SC2086: Double quote to prevent globbing and word splitting.
+
+...
+```
+
+---
+# Tooling - bats
+
+* Use *bats* for unit testing
+
+```
+@test "ACall with invalid workspace" {
+  run ogg2wav "${WORKSPACE}"
+
+  [ "${status}" -eq 3 ]
+  [ "${output}" = "No target provided" ]
+ }
+
+```
+* And at runtime
+
+```
+$ bats ogg2wav.bats
+ ✓ Appel sans arguments d'entrée
+ ✓ Appel avec un répertoire non existant
+ ✓ Appel sans répertoire cible
+ - Transformer un fichier OGG en WAV (skipped)
+
+4 tests, 0 failures, 1 skipped
+```
+
+* Pretty nice, isn't it?
+
+---
+# Example Script: git-set-clone
+
+* Let's look at real-life script together
+* And use shellcheck on it
 
     </textarea>
     <script type="text/javascript">
